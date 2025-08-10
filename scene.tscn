@@ -1,16 +1,25 @@
-[gd_scene load_steps=3 format=3 uid="uid://dldgq5gwnpfns"]
+[gd_scene load_steps=5 format=3 uid="uid://dldgq5gwnpfns"]
 
+[ext_resource type="Script" uid="uid://bns6or1mvagjc" path="res://scripts/freecam.gd" id="1_u3cyc"]
 [ext_resource type="Script" uid="uid://cphghhejaj214" path="res://scripts/ray_tracer.gd" id="1_ulcgi"]
-[ext_resource type="Script" uid="uid://by26507dy755c" path="res://display_output.gd" id="2_nxogm"]
+[ext_resource type="Script" uid="uid://cmjpqj62auokg" path="res://scripts/display_output.gd" id="2_nxogm"]
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_3253y"]
+load_path = "res://.godot/imported/citrus_orchard_puresky_2k.hdr-3f3ac135d55b3aaa3b469b6ab72a502a.ctex"
 
 [node name="Node3D" type="Node3D"]
-script = ExtResource("1_ulcgi")
-shader_file = "uid://cia1havywfrfw"
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -2.71739)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 3)
+script = ExtResource("1_u3cyc")
+
+[node name="Ray Tracer" type="Node" parent="Camera3D"]
+script = ExtResource("1_ulcgi")
+skybox_texture = SubResource("CompressedTexture2D_3253y")
+shader_file = "uid://cia1havywfrfw"
 
 [node name="Output Display" type="TextureRect" parent="Camera3D"]
+unique_name_in_owner = true
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
