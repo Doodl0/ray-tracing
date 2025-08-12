@@ -11,8 +11,13 @@ config_version=5
 [application]
 
 config/name="ray-tracing"
+run/main_scene="uid://dldgq5gwnpfns"
 config/features=PackedStringArray("4.4", "Forward Plus")
 
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/godot_super-wakatime/plugin.cfg")
+
+[rendering]
+
+anti_aliasing/quality/screen_space_aa=1

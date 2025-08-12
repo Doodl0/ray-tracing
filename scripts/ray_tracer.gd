@@ -1,8 +1,8 @@
-extends Node
+extends Node3D
 
-@export var skybox_texture: Texture
 var viewport_dimensions: Vector2i
 @onready var output_display: RenderOutput = $%"Output Display"
+@onready var previous_frame: RenderOutput = $%"Previous Frame"
 
 # Create local rendering device to run compute shaders on
 var rd := RenderingServer.create_local_rendering_device()
@@ -13,24 +13,39 @@ var skybox_rid: RID
 var uniform_set: RID
 var pipeline: RID
 var uniform_bindings: Array[RDUniform]
+var render_bytes: PackedByteArray
+
+# Antialias shader variables
+var enable_prog_aa := true
+var current_sample := 0
+@export var antialias_shader_material: ShaderMaterial
+var last_transform: Transform3D
+var last_frame: Texture2D
 
 func _ready() -> void:
-	# Set the render dimensions to the viewport dimensions so that the image is not stretched
-	viewport_dimensions.x = ProjectSettings.get_setting("display/window/size/viewport_width")
-	viewport_dimensions.y = ProjectSettings.get_setting("display/window/size/viewport_height")
-	
-	# Set the display image size to the same as the viewport
-	output_display.image_size = viewport_dimensions
+	last_transform = self.global_transform
+	update_viewport_size()
 	# Create the texture so that data can be added later
 	output_display.init_texture()
+	previous_frame.init_texture()
 	
 	setup_compute()
 	render()
 
 
 func _process(delta: float) -> void:
+	update_viewport_size()
 	update_compute()
 	render()
+	
+	if last_transform != self.global_transform:
+		last_transform = self.global_transform
+		current_sample = 0
+	
+	if enable_prog_aa:
+		progessive_antialias()
+	
+	#print(Engine.get_frames_per_second())
 
 func render():
 	# Validate that the pipeline has been created so to avoid errors
@@ -51,8 +66,9 @@ func render():
 	# Wait for the GPU to finish.
 	rd.sync()
 	
+	previous_frame.texture = output_display.texture
 	# Retrieve render data.
-	var render_bytes := rd.texture_get_data(render_rid, 0)
+	render_bytes = rd.texture_get_data(render_rid, 0)
 	output_display.display_render(render_bytes)
 
 
@@ -93,7 +109,6 @@ func setup_compute():
 	
 	# Create a projection matrix from camera projection
 	var projection := (get_viewport().get_camera_3d().get_camera_projection().inverse() * Projection.create_depth_correction(true))
-	print(projection)
 	var projection_matrix := PackedFloat32Array([
 		projection.x.x, projection.x.y, projection.x.z, projection.x.w,
 		projection.y.x, projection.y.y, projection.y.z, projection.y.w,
@@ -109,8 +124,17 @@ func setup_compute():
 	camera_data_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	camera_data_uniform.binding = 1
 	camera_data_uniform.add_id(camera_data_buffer)
+
+	# Antialiasing data buffer
+	var aa_data := PackedFloat32Array([randf() / 10, randf() / 10]).to_byte_array()
+	aa_data.append(current_sample)
+	var aa_buffer := rd.storage_buffer_create(aa_data.size(), aa_data)
+	var aa_uniform :=RDUniform.new()
+	aa_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	aa_uniform.binding = 2
+	aa_uniform.add_id(aa_buffer)
 	
-	uniform_bindings = [render_uniform, camera_data_uniform]
+	uniform_bindings = [render_uniform, camera_data_uniform, aa_uniform]
 	
 	# Create the set of uniforms from list of created uniforms and shader RID
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
@@ -131,7 +155,6 @@ func update_compute():
 	
 	# Create a projection matrix from camera projection
 	var projection := (get_viewport().get_camera_3d().get_camera_projection().inverse() * Projection.create_depth_correction(true))
-	print(projection)
 	var projection_matrix := PackedFloat32Array([
 		projection.x.x, projection.x.y, projection.x.z, projection.x.w,
 		projection.y.x, projection.y.y, projection.y.z, projection.y.w,
@@ -147,8 +170,18 @@ func update_compute():
 	camera_data_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	camera_data_uniform.binding = 1
 	camera_data_uniform.add_id(camera_data_buffer)
+
+	# Antialiasing data buffer
+	var aa_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
+	aa_data.append(current_sample)
+	var aa_buffer := rd.storage_buffer_create(aa_data.size(), aa_data)
+	var aa_uniform :=RDUniform.new()
+	aa_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	aa_uniform.binding = 2
+	aa_uniform.add_id(aa_buffer)
 	
 	uniform_bindings[1] = camera_data_uniform
+	uniform_bindings[2] = aa_uniform
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
 
 # Import, compile and load shader, return reference.
@@ -156,3 +189,25 @@ func load_shader(p_rd: RenderingDevice, path: String) -> RID:
 	var shader_file_data: RDShaderFile = load(path)
 	var shader_spirv: RDShaderSPIRV = shader_file_data.get_spirv()
 	return p_rd.shader_create_from_spirv(shader_spirv)
+
+func transform_updated():
+	last_transform = self.global_transform
+	current_sample = 0
+
+func progessive_antialias():
+	if antialias_shader_material == null:
+		return
+	
+	antialias_shader_material.set_shader_parameter("current_sample", current_sample)
+	output_display.material = antialias_shader_material
+	current_sample += 1
+	print(current_sample)
+
+func update_viewport_size():
+	# Set the render dimensions to the viewport dimensions so that the image is not stretched
+	viewport_dimensions.x = ProjectSettings.get_setting("display/window/size/viewport_width")
+	viewport_dimensions.y = ProjectSettings.get_setting("display/window/size/viewport_height")
+	
+	# Set the display image size to the same as the viewport
+	output_display.image_size = viewport_dimensions
+	previous_frame.image_size = viewport_dimensions

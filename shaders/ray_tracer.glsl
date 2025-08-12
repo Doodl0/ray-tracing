@@ -13,6 +13,13 @@ layout(set = 0, binding = 1, std430) restrict buffer CameraData {
 }
 camera_data;
 
+// Antialiasing data buffer
+layout(set = 0, binding = 2, std430) restrict buffer AntialiasData {
+    vec2 offset;
+    int current_sample;
+}
+aa_data;
+
 struct Ray {
     vec3 origin;
     vec3 direction;
@@ -103,12 +110,17 @@ vec3 Shade(inout Ray ray, RayHit hit) {
     }
 }
 
+void aa(ivec2 pos) {
+	vec4 overlay = vec4(imageLoad(image_render, pos).rgb, (1.0f / float(aa_data.current_sample + 1)));
+	imageStore(image_render, pos, overlay);;
+}
+
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 image_size = imageSize(image_render);
     
     // Transform pixels to [-1, 1] range
-    vec2 uv = vec2((pos.xy) / vec2(image_size) * 2.0f - 1.0f);
+    vec2 uv = vec2((pos.xy + aa_data.offset) / vec2(image_size) * 2.0f - 1.0f);
 
     // Create a ray for the UVs
     Ray ray = CreateCameraRay(uv);
@@ -117,4 +129,7 @@ void main() {
     vec3 result = Shade(ray, hit);
 
     imageStore(image_render, pos, vec4(result, 1.0));
+
+    //aa(pos);
 }
+
