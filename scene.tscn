@@ -30,7 +30,7 @@ script = ExtResource("1_ulcgi")
 shader_file = "uid://cia1havywfrfw"
 antialias_shader_material = SubResource("ShaderMaterial_u3cyc")
 
-[node name="Output Display" type="TextureRect" parent="Camera3D"]
+[node name="Previous Frame" type="TextureRect" parent="Camera3D"]
 unique_name_in_owner = true
 texture_filter = 1
 anchors_preset = 15
@@ -41,7 +41,7 @@ grow_vertical = 2
 script = ExtResource("2_nxogm")
 metadata/_edit_use_anchors_ = true
 
-[node name="Previous Frame" type="TextureRect" parent="Camera3D"]
+[node name="Output Display" type="TextureRect" parent="Camera3D"]
 unique_name_in_owner = true
 texture_filter = 1
 anchors_preset = 15

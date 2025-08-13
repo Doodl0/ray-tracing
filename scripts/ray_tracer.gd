@@ -16,7 +16,6 @@ var uniform_bindings: Array[RDUniform]
 var render_bytes: PackedByteArray
 
 # Antialias shader variables
-var enable_prog_aa := true
 var current_sample := 0
 @export var antialias_shader_material: ShaderMaterial
 var last_transform: Transform3D
@@ -42,8 +41,9 @@ func _process(delta: float) -> void:
 		last_transform = self.global_transform
 		current_sample = 0
 	
-	if enable_prog_aa:
-		progessive_antialias()
+	progessive_antialias()
+		
+	previous_frame.texture = ImageTexture.create_from_image(get_viewport().get_texture().get_image())
 	
 	#print(Engine.get_frames_per_second())
 
@@ -66,7 +66,6 @@ func render():
 	# Wait for the GPU to finish.
 	rd.sync()
 	
-	previous_frame.texture = output_display.texture
 	# Retrieve render data.
 	render_bytes = rd.texture_get_data(render_rid, 0)
 	output_display.display_render(render_bytes)

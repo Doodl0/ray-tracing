@@ -130,6 +130,6 @@ void main() {
 
     imageStore(image_render, pos, vec4(result, 1.0));
 
-    //aa(pos);
+    aa(pos);
 }
 
