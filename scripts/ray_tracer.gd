@@ -2,31 +2,33 @@ extends Node3D
 
 var viewport_dimensions: Vector2i
 @onready var output_display: RenderOutput = $%"Output Display"
-@onready var previous_frame: RenderOutput = $%"Previous Frame"
 
 # Create local rendering device to run compute shaders on
 var rd := RenderingServer.create_local_rendering_device()
 var shader_rid: RID
 @export_file("*.glsl") var shader_file: String
 var render_rid: RID
-var skybox_rid: RID
+var render_format: RDTextureFormat
+var render_view := RDTextureView.new()
+var sky_rid: RID
+var frame_rid
 var uniform_set: RID
 var pipeline: RID
 var uniform_bindings: Array[RDUniform]
 var render_bytes: PackedByteArray
 
+@export var sky_texture: Texture2D
+
 # Antialias shader variables
 var current_sample := 0
-@export var antialias_shader_material: ShaderMaterial
+var max_samples := 250
 var last_transform: Transform3D
-var last_frame: Texture2D
 
 func _ready() -> void:
 	last_transform = self.global_transform
 	update_viewport_size()
 	# Create the texture so that data can be added later
 	output_display.init_texture()
-	previous_frame.init_texture()
 	
 	setup_compute()
 	render()
@@ -41,10 +43,10 @@ func _process(delta: float) -> void:
 		last_transform = self.global_transform
 		current_sample = 0
 	
-	progessive_antialias()
+	if !(current_sample + 1 >= max_samples):
+		current_sample += 1
 		
-	previous_frame.texture = ImageTexture.create_from_image(get_viewport().get_texture().get_image())
-	
+	print(current_sample)
 	#print(Engine.get_frames_per_second())
 
 func render():
@@ -76,18 +78,17 @@ func setup_compute():
 	shader_rid = load_shader(rd, shader_file)
 	
 	# Create a format for the render image
-	var render_format = RDTextureFormat.new()
+	render_format = RDTextureFormat.new()
 	render_format.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
 	render_format.height = viewport_dimensions.y
 	render_format.width = viewport_dimensions.x
 	# Set usage bits. Can add the required bits together
-	render_format.usage_bits = \
+	render_format.usage_bits =  \
 			RenderingDevice.TEXTURE_USAGE_STORAGE_BIT + \
 			RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT + \
-			RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
-	
+			RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT	
 	# Prepare render texture now and set the data later.
-	render_rid = rd.texture_create(render_format, RDTextureView.new())
+	render_rid = rd.texture_create(render_format, render_view)
 	
 	var render_uniform := RDUniform.new()
 	render_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
@@ -123,17 +124,43 @@ func setup_compute():
 	camera_data_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	camera_data_uniform.binding = 1
 	camera_data_uniform.add_id(camera_data_buffer)
+	
+	var sampler_state := RDSamplerState.new()
+	sampler_state.min_filter = 1
+	sampler_state.repeat_u = 0
+	sampler_state.repeat_v = 0
+	
+	# Sky texture uniform
+	var sky_image := sky_texture.get_image()
+	sky_image.convert(Image.FORMAT_RGBA8)
+	var sky_data := sky_image.get_data()
+	
+	var sky_format := RDTextureFormat.new()
+	sky_format.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_SRGB
+	sky_format.width = sky_texture.get_width()
+	sky_format.height = sky_texture.get_height()
+	sky_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
+	
+	sky_rid = rd.texture_create(sky_format, RDTextureView.new(), [sky_data])
+	var sky_sampler := rd.sampler_create(sampler_state)
+	
+	var sky_uniform := RDUniform.new()
+	sky_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_SAMPLER_WITH_TEXTURE
+	sky_uniform.binding = 2
+	sky_uniform.add_id(sky_sampler)
+	sky_uniform.add_id(sky_rid)
 
 	# Antialiasing data buffer
-	var aa_data := PackedFloat32Array([randf() / 10, randf() / 10]).to_byte_array()
-	aa_data.append(current_sample)
+	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
+	var current_sample_data := PackedInt32Array([current_sample]).to_byte_array()
+	var aa_data := offset_data + current_sample_data
 	var aa_buffer := rd.storage_buffer_create(aa_data.size(), aa_data)
-	var aa_uniform :=RDUniform.new()
+	var aa_uniform := RDUniform.new()
 	aa_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	aa_uniform.binding = 2
+	aa_uniform.binding = 3
 	aa_uniform.add_id(aa_buffer)
 	
-	uniform_bindings = [render_uniform, camera_data_uniform, aa_uniform]
+	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, aa_uniform]
 	
 	# Create the set of uniforms from list of created uniforms and shader RID
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
@@ -141,6 +168,15 @@ func setup_compute():
 	pipeline = rd.compute_pipeline_create(shader_rid)
 
 func update_compute():
+	# Prepare render texture now and set the data later.
+	#render_rid = rd.texture_update(render_rid)
+	
+	#var render_uniform := RDUniform.new()
+	#render_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
+	# Set binding to matching binding in the shader
+	#render_uniform.binding = 0
+	#render_uniform.add_id(render_rid)
+	
 	# Create matrix from camera transform
 	var camera_to_world := get_viewport().get_camera_3d().global_transform
 	var basis := camera_to_world.basis
@@ -169,18 +205,20 @@ func update_compute():
 	camera_data_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	camera_data_uniform.binding = 1
 	camera_data_uniform.add_id(camera_data_buffer)
-
+	
 	# Antialiasing data buffer
-	var aa_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
-	aa_data.append(current_sample)
+	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
+	var current_sample_data := PackedInt32Array([current_sample]).to_byte_array()
+	var aa_data := offset_data + current_sample_data
 	var aa_buffer := rd.storage_buffer_create(aa_data.size(), aa_data)
-	var aa_uniform :=RDUniform.new()
+	var aa_uniform := RDUniform.new()
 	aa_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	aa_uniform.binding = 2
+	aa_uniform.binding = 3
 	aa_uniform.add_id(aa_buffer)
 	
+	#uniform_bindings[0] = render_uniform
 	uniform_bindings[1] = camera_data_uniform
-	uniform_bindings[2] = aa_uniform
+	uniform_bindings[3] = aa_uniform
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
 
 # Import, compile and load shader, return reference.
@@ -193,15 +231,6 @@ func transform_updated():
 	last_transform = self.global_transform
 	current_sample = 0
 
-func progessive_antialias():
-	if antialias_shader_material == null:
-		return
-	
-	antialias_shader_material.set_shader_parameter("current_sample", current_sample)
-	output_display.material = antialias_shader_material
-	current_sample += 1
-	print(current_sample)
-
 func update_viewport_size():
 	# Set the render dimensions to the viewport dimensions so that the image is not stretched
 	viewport_dimensions.x = ProjectSettings.get_setting("display/window/size/viewport_width")
@@ -209,4 +238,3 @@ func update_viewport_size():
 	
 	# Set the display image size to the same as the viewport
 	output_display.image_size = viewport_dimensions
-	previous_frame.image_size = viewport_dimensions

@@ -1,23 +1,9 @@
-[gd_scene load_steps=6 format=3 uid="uid://dldgq5gwnpfns"]
+[gd_scene load_steps=5 format=3 uid="uid://dldgq5gwnpfns"]
 
 [ext_resource type="Script" uid="uid://bns6or1mvagjc" path="res://scripts/freecam.gd" id="1_u3cyc"]
 [ext_resource type="Script" uid="uid://cphghhejaj214" path="res://scripts/ray_tracer.gd" id="1_ulcgi"]
 [ext_resource type="Script" uid="uid://cmjpqj62auokg" path="res://scripts/display_output.gd" id="2_nxogm"]
-
-[sub_resource type="Shader" id="Shader_3253y"]
-code = "shader_type canvas_item;
-
-uniform int current_sample;
-uniform sampler2D tex : hint_screen_texture, repeat_disable, filter_nearest;
-
-void fragment() {
-	vec4 overlay = vec4(texture(TEXTURE, UV).rgb, (1.0f / float(current_sample + 1)));
-	COLOR =	overlay;
-}"
-
-[sub_resource type="ShaderMaterial" id="ShaderMaterial_u3cyc"]
-shader = SubResource("Shader_3253y")
-shader_parameter/current_sample = 0
+[ext_resource type="Texture2D" uid="uid://dtbeba4quh7nt" path="res://textures/sky.png" id="3_m7jmp"]
 
 [node name="Node3D" type="Node3D"]
 
@@ -28,18 +14,7 @@ script = ExtResource("1_u3cyc")
 [node name="Ray Tracer" type="Node3D" parent="Camera3D"]
 script = ExtResource("1_ulcgi")
 shader_file = "uid://cia1havywfrfw"
-antialias_shader_material = SubResource("ShaderMaterial_u3cyc")
-
-[node name="Previous Frame" type="TextureRect" parent="Camera3D"]
-unique_name_in_owner = true
-texture_filter = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-script = ExtResource("2_nxogm")
-metadata/_edit_use_anchors_ = true
+sky_texture = ExtResource("3_m7jmp")
 
 [node name="Output Display" type="TextureRect" parent="Camera3D"]
 unique_name_in_owner = true

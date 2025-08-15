@@ -8,13 +8,16 @@ layout(rgba32f, binding = 0) uniform image2D image_render;
 
 // Binding to camera data buffer
 layout(set = 0, binding = 1, std430) restrict buffer CameraData {
-    mat4 CameraToWorld;
-    mat4 CameraProjection;
+    mat4 camera_to_world;
+    mat4 camera_projection;
 }
 camera_data;
 
+// Sky sampler uniform
+layout(set = 0, binding = 2) uniform sampler2D sky_texture;
+
 // Antialiasing data buffer
-layout(set = 0, binding = 2, std430) restrict buffer AntialiasData {
+layout(set = 0, binding = 3) restrict buffer AntialiasData {
     vec2 offset;
     int current_sample;
 }
@@ -23,6 +26,7 @@ aa_data;
 struct Ray {
     vec3 origin;
     vec3 direction;
+    vec3 energy;
 };
 
 struct RayHit
@@ -34,23 +38,23 @@ struct RayHit
 
 const float PI = 3.14159265f;
 const float INF = 99999999.0;
-const vec3 sky_color = vec3(0.761, 0.965, 1);
 
 Ray CreateRay(vec3 origin, vec3 direction) {
     Ray ray;
     ray.origin = origin;
     ray.direction = direction;
+    ray.energy = vec3(1.0f, 1.0f, 1.0f);
     return ray;
 }
 
 Ray CreateCameraRay(vec2 uv) {
     // Transform the camera origin to world space
-    vec3 origin = camera_data.CameraToWorld[3].xyz;
+    vec3 origin = camera_data.camera_to_world[3].xyz;
     
     // Invert the perspective projection of the view-space position
-    vec3 direction = (camera_data.CameraProjection * vec4(uv, 0.0, 1.0)).xyz;
+    vec3 direction = (camera_data.camera_projection * vec4(uv, 0.0, 1.0)).xyz;
     // Transform the direction from camera to world space and normalize
-    direction = (camera_data.CameraToWorld * vec4(direction, 0.0)).xyz;
+    direction = (camera_data.camera_to_world * vec4(direction, 0.0)).xyz;
     direction = normalize(direction);
     return CreateRay(origin, direction);
 }
@@ -102,17 +106,32 @@ RayHit Trace(Ray ray)
 
 vec3 Shade(inout Ray ray, RayHit hit) {
     if (hit.distance < INF) {
-        // Return the normal
-        return hit.normal;
+        vec3 specular = vec3(0.6f, 0.6f, 0.6f);
+
+        // Reflect the ray and multiply energy with specular reflection
+        ray.origin = hit.position + hit.normal * 0.001f;
+        ray.direction = reflect(ray.direction, hit.normal);
+        ray.energy *= specular;
+        // Return nothing
+        return vec3(0.0f, 0.0f, 0.0f);
     }
     else {
-        return sky_color;
+        // Erase the ray's energy - the sky doesn't reflect anything
+        ray.energy = vec3(0.0f, 0.0f, 0.0f);
+        float theta = acos(ray.direction.y) / -PI;
+        float phi = atan(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+        vec4 result = texture(sky_texture, vec2(phi, -theta));
+        return result.xyz;
     }
 }
 
-void aa(ivec2 pos) {
-	vec4 overlay = vec4(imageLoad(image_render, pos).rgb, (1.0f / float(aa_data.current_sample + 1)));
-	imageStore(image_render, pos, overlay);;
+vec4 aa(vec4 pixel, ivec2 pos) {
+    if (aa_data.current_sample < 1) {
+        return pixel;
+    }
+	vec4 frame_sample = imageLoad(image_render, pos);
+    float alpha = 1.0f / float(aa_data.current_sample);
+	return mix(frame_sample, pixel, alpha);
 }
 
 void main() {
@@ -128,8 +147,14 @@ void main() {
     RayHit hit = Trace(ray);
     vec3 result = Shade(ray, hit);
 
-    imageStore(image_render, pos, vec4(result, 1.0));
+    for (int i = 0; i < 8; i++)
+    {
+        RayHit hit = Trace(ray);
+        result += ray.energy * Shade(ray, hit);
+        if (!any(bvec3(ray.energy)))
+            break;
+    }
 
-    aa(pos);
+    imageStore(image_render, pos, aa(vec4(result, 1.0), pos.xy));
 }
 
