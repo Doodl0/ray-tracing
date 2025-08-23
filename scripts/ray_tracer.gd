@@ -20,8 +20,6 @@ var camera_data_buffer: RID
 var projection_matrix: PackedByteArray
 @onready var camera3D := get_viewport().get_camera_3d()
 
-var aa_buffer: RID
-
 # World information
 @export var directional_light: DirectionalLight3D
 @export var sky_texture: Texture2D
@@ -32,6 +30,11 @@ var sky_rid: RID
 var current_sample := 0
 var max_samples := 255
 var last_transform: Transform3D
+var aa_buffer: RID
+
+# Mesh data
+@export var spheres: Array[Sphere]
+var sphere_buffer: RID
 
 func _ready() -> void:
 	last_transform = self.global_transform
@@ -139,11 +142,11 @@ func setup_compute():
 	
 	# Sky texture uniform
 	var sky_image := sky_texture.get_image()
-	sky_image.convert(Image.FORMAT_RGBA8)
+	sky_image.convert(Image.FORMAT_RGBAF)
 	var sky_data := sky_image.get_data()
 	
 	var sky_format := RDTextureFormat.new()
-	sky_format.format = RenderingDevice.DATA_FORMAT_R8G8B8A8_SRGB
+	sky_format.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
 	sky_format.width = sky_texture.get_width()
 	sky_format.height = sky_texture.get_height()
 	sky_format.usage_bits = RenderingDevice.TEXTURE_USAGE_SAMPLING_BIT
@@ -178,7 +181,16 @@ func setup_compute():
 	aa_uniform.binding = 4
 	aa_uniform.add_id(aa_buffer)
 	
-	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, light_uniform, aa_uniform]
+	var sphere_data := PackedByteArray()
+	for sphere in spheres:
+		sphere_data.append_array(sphere.get_data())
+	sphere_buffer = rd.storage_buffer_create(sphere_data.size(), sphere_data)
+	var sphere_uniform := RDUniform.new()
+	sphere_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	sphere_uniform.binding = 5
+	sphere_uniform.add_id(sphere_buffer)
+	
+	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, light_uniform, aa_uniform, sphere_uniform]
 	
 	# Create the set of uniforms from list of created uniforms and shader RID
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
@@ -224,9 +236,11 @@ func load_shader(p_rd: RenderingDevice, path: String) -> RID:
 	var shader_spirv: RDShaderSPIRV = shader_file_data.get_spirv()
 	return p_rd.shader_create_from_spirv(shader_spirv)
 
+
 func transform_updated():
 	last_transform = self.global_transform
 	current_sample = 0
+
 
 func update_viewport_size():
 	# Set the render dimensions to the viewport dimensions so that the image is not stretched

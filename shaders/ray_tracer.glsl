@@ -29,6 +29,19 @@ layout(set = 0, binding = 4, std430) restrict buffer AntialiasData {
 }
 aa_data;
 
+struct Sphere
+{
+    vec3 position;
+    float radius;
+    vec3 albedo;
+    float specular;
+};
+
+layout(set = 0, binding = 5, std430) restrict buffer Spheres {
+    Sphere spheres[];
+}
+spheres;
+
 struct Ray {
     vec3 origin;
     vec3 direction;
@@ -40,13 +53,8 @@ struct RayHit
     vec3 position;
     float distance;
     vec3 normal;
-};
-
-struct Material {
-    vec4 colour;
-    vec4 emission_colour;
-    vec4 specular_colour;
-    float emission_strenth;
+    vec3 albedo;
+    vec3 specular;
 };
 
 const float PI = 3.14159265f;
@@ -77,6 +85,8 @@ RayHit CreateRayHit() {
     hit.position = vec3(0.0f, 0.0f, 0.0f);
     hit.distance = INF;
     hit.normal = vec3(0.0f, 0.0f, 0.0f);
+    hit.albedo = vec3(0.0f, 0.0f, 0.0f);
+    hit.specular = vec3(0.0f, 0.0f, 0.0f);
     return hit;
 }
 
@@ -90,12 +100,12 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit) {
     }
 }
 
-void IntersectSphere(Ray ray, inout RayHit bestHit, vec4 sphere)
+void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 {
     // Calculate distance along the ray where the sphere is intersected
-    vec3 d = ray.origin - sphere.xyz;
+    vec3 d = ray.origin - sphere.position;
     float p1 = -dot(ray.direction, d);
-    float p2sqr = p1 * p1 - dot(d, d) + sphere.w * sphere.w;
+    float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
     if (p2sqr < 0)
         return;
     float p2 = sqrt(p2sqr);
@@ -104,28 +114,32 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, vec4 sphere)
     {
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
-        bestHit.normal = normalize(bestHit.position - sphere.xyz);
+        bestHit.normal = normalize(bestHit.position - sphere.position);
+        bestHit.albedo = sphere.albedo;
+        vec3 specular = vec3(sphere.specular, sphere.specular, sphere.specular);
+        bestHit.specular = specular;
     }
 }
 
 RayHit Trace(Ray ray)
 {
     RayHit bestHit = CreateRayHit();
-    IntersectGroundPlane(ray, bestHit);
+    //IntersectGroundPlane(ray, bestHit);
     // Add a floating unit sphere
-    IntersectSphere(ray, bestHit, vec4(0, 3.0f, 0, 1.0f));
+    for (int i = 0; i <= spheres.spheres.length(); i++)
+	{
+		Sphere sphere = spheres.spheres[i];
+		IntersectSphere(ray, bestHit, sphere);
+	}
     return bestHit;
 }
 
 vec3 Shade(inout Ray ray, RayHit hit) {
     if (hit.distance < INF) {
-        vec3 albedo = vec3(0.8f, 0.8f, 0.8f);
-        vec3 specular = vec3(0.04f, 0.04f, 0.04f);
-
         // Reflect the ray and multiply energy with specular reflection
         ray.origin = hit.position + hit.normal * 0.001f;
         ray.direction = reflect(ray.direction, hit.normal);
-        ray.energy *= specular;
+        ray.energy *= hit.specular;
 
         // Shadow test ray
         bool shadow = false;
@@ -137,7 +151,7 @@ vec3 Shade(inout Ray ray, RayHit hit) {
         }
         
         // Return a diffuse-shaded color
-        return clamp(dot(hit.normal, directional_light.data.xyz) * -1, 0.0f, 1.0f) * directional_light.data.w * albedo;
+        return clamp(dot(hit.normal, directional_light.data.xyz) * -1, 0.0f, 1.0f) * directional_light.data.w * hit.albedo;
     }
     else {
         // Erase the ray's energy - the sky doesn't reflect anything
