@@ -7,21 +7,30 @@ var viewport_dimensions: Vector2i
 var rd := RenderingServer.create_local_rendering_device()
 var shader_rid: RID
 @export_file("*.glsl") var shader_file: String
+
 var render_rid: RID
 var render_format: RDTextureFormat
 var render_view := RDTextureView.new()
-var sky_rid: RID
-var frame_rid
+
 var uniform_set: RID
 var pipeline: RID
 var uniform_bindings: Array[RDUniform]
-var render_bytes: PackedByteArray
 
+var camera_data_buffer: RID
+var projection_matrix: PackedByteArray
+@onready var camera3D := get_viewport().get_camera_3d()
+
+var aa_buffer: RID
+
+# World information
+@export var directional_light: DirectionalLight3D
 @export var sky_texture: Texture2D
+var directional_light_buffer: RID
+var sky_rid: RID
 
 # Antialias shader variables
 var current_sample := 0
-var max_samples := 250
+var max_samples := 255
 var last_transform: Transform3D
 
 func _ready() -> void:
@@ -35,7 +44,6 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	update_viewport_size()
 	update_compute()
 	render()
 	
@@ -46,7 +54,6 @@ func _process(delta: float) -> void:
 	if !(current_sample + 1 >= max_samples):
 		current_sample += 1
 		
-	print(current_sample)
 	#print(Engine.get_frames_per_second())
 
 func render():
@@ -69,7 +76,7 @@ func render():
 	rd.sync()
 	
 	# Retrieve render data.
-	render_bytes = rd.texture_get_data(render_rid, 0)
+	var render_bytes = rd.texture_get_data(render_rid, 0)
 	output_display.display_render(render_bytes)
 
 
@@ -97,7 +104,7 @@ func setup_compute():
 	render_uniform.add_id(render_rid)
 	
 	# Create matrix from camera transform
-	var camera_to_world := get_viewport().get_camera_3d().global_transform
+	var camera_to_world := camera3D.global_transform
 	var basis := camera_to_world.basis
 	var origin := camera_to_world.origin
 	var camera_to_world_matrix := PackedFloat32Array([
@@ -108,8 +115,8 @@ func setup_compute():
 	]).to_byte_array()
 	
 	# Create a projection matrix from camera projection
-	var projection := (get_viewport().get_camera_3d().get_camera_projection().inverse() * Projection.create_depth_correction(true))
-	var projection_matrix := PackedFloat32Array([
+	var projection := (camera3D.get_camera_projection().inverse() * Projection.create_depth_correction(true))
+	projection_matrix = PackedFloat32Array([
 		projection.x.x, projection.x.y, projection.x.z, projection.x.w,
 		projection.y.x, projection.y.y, projection.y.z, projection.y.w,
 		projection.z.x, projection.z.y, projection.z.z, projection.z.w,
@@ -119,7 +126,7 @@ func setup_compute():
 	var camera_data_bytes := PackedByteArray()
 	camera_data_bytes.append_array(camera_to_world_matrix)
 	camera_data_bytes.append_array(projection_matrix)
-	var camera_data_buffer := rd.storage_buffer_create(camera_data_bytes.size(), camera_data_bytes)
+	camera_data_buffer = rd.storage_buffer_create(camera_data_bytes.size(), camera_data_bytes)
 	var camera_data_uniform := RDUniform.new()
 	camera_data_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	camera_data_uniform.binding = 1
@@ -149,18 +156,29 @@ func setup_compute():
 	sky_uniform.binding = 2
 	sky_uniform.add_id(sky_sampler)
 	sky_uniform.add_id(sky_rid)
+	
+	# Directional light buffer
+	var direction := -directional_light.transform.basis.z
+	var intensity := directional_light.light_energy
+	var light_data := PackedFloat32Array([direction.x, direction.y, direction.z, intensity]).to_byte_array()
+	directional_light_buffer = rd.storage_buffer_create(light_data.size(), light_data)
+	var light_uniform := RDUniform.new()
+	light_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	light_uniform.binding = 3
+	light_uniform.add_id(directional_light_buffer)
+	print(direction)
 
 	# Antialiasing data buffer
 	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
 	var current_sample_data := PackedInt32Array([current_sample]).to_byte_array()
 	var aa_data := offset_data + current_sample_data
-	var aa_buffer := rd.storage_buffer_create(aa_data.size(), aa_data)
+	aa_buffer = rd.storage_buffer_create(aa_data.size(), aa_data)
 	var aa_uniform := RDUniform.new()
 	aa_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	aa_uniform.binding = 3
+	aa_uniform.binding = 4
 	aa_uniform.add_id(aa_buffer)
 	
-	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, aa_uniform]
+	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, light_uniform, aa_uniform]
 	
 	# Create the set of uniforms from list of created uniforms and shader RID
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
@@ -168,15 +186,6 @@ func setup_compute():
 	pipeline = rd.compute_pipeline_create(shader_rid)
 
 func update_compute():
-	# Prepare render texture now and set the data later.
-	#render_rid = rd.texture_update(render_rid)
-	
-	#var render_uniform := RDUniform.new()
-	#render_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_IMAGE
-	# Set binding to matching binding in the shader
-	#render_uniform.binding = 0
-	#render_uniform.add_id(render_rid)
-	
 	# Create matrix from camera transform
 	var camera_to_world := get_viewport().get_camera_3d().global_transform
 	var basis := camera_to_world.basis
@@ -200,26 +209,14 @@ func update_compute():
 	var camera_data_bytes := PackedByteArray()
 	camera_data_bytes.append_array(camera_to_world_matrix)
 	camera_data_bytes.append_array(projection_matrix)
-	var camera_data_buffer := rd.storage_buffer_create(camera_data_bytes.size(), camera_data_bytes)
-	var camera_data_uniform := RDUniform.new()
-	camera_data_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	camera_data_uniform.binding = 1
-	camera_data_uniform.add_id(camera_data_buffer)
+	rd.buffer_update(camera_data_buffer, 0, camera_data_bytes.size(), camera_data_bytes)
 	
 	# Antialiasing data buffer
 	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
 	var current_sample_data := PackedInt32Array([current_sample]).to_byte_array()
 	var aa_data := offset_data + current_sample_data
-	var aa_buffer := rd.storage_buffer_create(aa_data.size(), aa_data)
-	var aa_uniform := RDUniform.new()
-	aa_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
-	aa_uniform.binding = 3
-	aa_uniform.add_id(aa_buffer)
-	
-	#uniform_bindings[0] = render_uniform
-	uniform_bindings[1] = camera_data_uniform
-	uniform_bindings[3] = aa_uniform
-	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
+	rd.buffer_update(aa_buffer, 0, aa_data.size(), aa_data)
+
 
 # Import, compile and load shader, return reference.
 func load_shader(p_rd: RenderingDevice, path: String) -> RID:

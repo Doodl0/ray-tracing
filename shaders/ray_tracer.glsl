@@ -16,8 +16,14 @@ camera_data;
 // Sky sampler uniform
 layout(set = 0, binding = 2) uniform sampler2D sky_texture;
 
+// Directional light data
+layout(set = 0, binding = 3, std430) restrict buffer DirectionalLight {
+    vec4 data;
+}
+directional_light;
+
 // Antialiasing data buffer
-layout(set = 0, binding = 3) restrict buffer AntialiasData {
+layout(set = 0, binding = 4, std430) restrict buffer AntialiasData {
     vec2 offset;
     int current_sample;
 }
@@ -34,6 +40,13 @@ struct RayHit
     vec3 position;
     float distance;
     vec3 normal;
+};
+
+struct Material {
+    vec4 colour;
+    vec4 emission_colour;
+    vec4 specular_colour;
+    float emission_strenth;
 };
 
 const float PI = 3.14159265f;
@@ -106,14 +119,25 @@ RayHit Trace(Ray ray)
 
 vec3 Shade(inout Ray ray, RayHit hit) {
     if (hit.distance < INF) {
-        vec3 specular = vec3(0.6f, 0.6f, 0.6f);
+        vec3 albedo = vec3(0.8f, 0.8f, 0.8f);
+        vec3 specular = vec3(0.04f, 0.04f, 0.04f);
 
         // Reflect the ray and multiply energy with specular reflection
         ray.origin = hit.position + hit.normal * 0.001f;
         ray.direction = reflect(ray.direction, hit.normal);
         ray.energy *= specular;
-        // Return nothing
-        return vec3(0.0f, 0.0f, 0.0f);
+
+        // Shadow test ray
+        bool shadow = false;
+        Ray shadowRay = CreateRay(hit.position + hit.normal * 0.001f, -1 * directional_light.data.xyz);
+        RayHit shadowHit = Trace(shadowRay);
+        if (shadowHit.distance != INF)
+        {
+            return vec3(0.0f, 0.0f, 0.0f);
+        }
+        
+        // Return a diffuse-shaded color
+        return clamp(dot(hit.normal, directional_light.data.xyz) * -1, 0.0f, 1.0f) * directional_light.data.w * albedo;
     }
     else {
         // Erase the ray's energy - the sky doesn't reflect anything
@@ -130,7 +154,7 @@ vec4 aa(vec4 pixel, ivec2 pos) {
         return pixel;
     }
 	vec4 frame_sample = imageLoad(image_render, pos);
-    float alpha = 1.0f / float(aa_data.current_sample);
+    float alpha = 1.0f / float(aa_data.current_sample + 1);
 	return mix(frame_sample, pixel, alpha);
 }
 

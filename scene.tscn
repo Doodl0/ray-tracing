@@ -11,9 +11,10 @@
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 3)
 script = ExtResource("1_u3cyc")
 
-[node name="Ray Tracer" type="Node3D" parent="Camera3D"]
+[node name="Ray Tracer" type="Node3D" parent="Camera3D" node_paths=PackedStringArray("directional_light")]
 script = ExtResource("1_ulcgi")
 shader_file = "uid://cia1havywfrfw"
+directional_light = NodePath("../../DirectionalLight3D")
 sky_texture = ExtResource("3_m7jmp")
 
 [node name="Output Display" type="TextureRect" parent="Camera3D"]
@@ -26,3 +27,6 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("2_nxogm")
 metadata/_edit_use_anchors_ = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.916733, 0.399501, 0, -0.399501, 0.916733, 0, 3.59957, 6.59913)
