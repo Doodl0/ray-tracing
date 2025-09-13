@@ -1,7 +1,9 @@
 extends Node3D
 
+@export var sphere_seed: int
 var viewport_dimensions: Vector2i
 @onready var output_display: RenderOutput = $%"Output Display"
+@onready var fps: Label = $%"FPS"
 
 # Create local rendering device to run compute shaders on
 var rd := RenderingServer.create_local_rendering_device()
@@ -20,10 +22,10 @@ var camera_data_buffer: RID
 var projection_matrix: PackedByteArray
 @onready var camera3D := get_viewport().get_camera_3d()
 
-# World information
+# Scene information
 @export var directional_light: DirectionalLight3D
 @export var sky_texture: Texture2D
-var directional_light_buffer: RID
+var scene_data_buffer: RID
 var sky_rid: RID
 
 # Antialias shader variables
@@ -37,6 +39,7 @@ var aa_buffer: RID
 var sphere_buffer: RID
 
 func _ready() -> void:
+	seed(sphere_seed)
 	last_transform = self.global_transform
 	update_viewport_size()
 	# Create the texture so that data can be added later
@@ -56,7 +59,8 @@ func _process(delta: float) -> void:
 	
 	if !(current_sample + 1 >= max_samples):
 		current_sample += 1
-		
+	
+	fps.text = str(Engine.get_frames_per_second())
 	#print(Engine.get_frames_per_second())
 
 func render():
@@ -160,16 +164,17 @@ func setup_compute():
 	sky_uniform.add_id(sky_sampler)
 	sky_uniform.add_id(sky_rid)
 	
-	# Directional light buffer
+	# Scene data buffer
 	var direction := -directional_light.transform.basis.z
 	var intensity := directional_light.light_energy
-	var light_data := PackedFloat32Array([direction.x, direction.y, direction.z, intensity]).to_byte_array()
-	directional_light_buffer = rd.storage_buffer_create(light_data.size(), light_data)
+	var seed := PackedFloat32Array([float(sphere_seed)]).to_byte_array()
+	var scene_data := PackedFloat32Array([direction.x, direction.y, direction.z, intensity]).to_byte_array()
+	scene_data.append_array(seed)
+	scene_data_buffer = rd.storage_buffer_create(scene_data.size(), scene_data)
 	var light_uniform := RDUniform.new()
 	light_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
 	light_uniform.binding = 3
-	light_uniform.add_id(directional_light_buffer)
-	print(direction)
+	light_uniform.add_id(scene_data_buffer)
 
 	# Antialiasing data buffer
 	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()

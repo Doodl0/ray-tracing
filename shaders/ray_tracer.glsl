@@ -17,10 +17,11 @@ camera_data;
 layout(set = 0, binding = 2) uniform sampler2D sky_texture;
 
 // Directional light data
-layout(set = 0, binding = 3, std430) restrict buffer DirectionalLight {
-    vec4 data;
+layout(set = 0, binding = 3, std430) restrict buffer SceneInfo {
+    vec4 directional_light;
+    float seed;
 }
-directional_light;
+scene_info;
 
 // Antialiasing data buffer
 layout(set = 0, binding = 4, std430) restrict buffer AntialiasData {
@@ -60,6 +61,40 @@ struct RayHit
 const float PI = 3.14159265f;
 const float INF = 99999999.0;
 
+float rand()
+{
+    float result = fract(sin(scene_info.seed / INF * dot(vec2(gl_GlobalInvocationID.xy), vec2(12.9898f, 78.233f))) * 43758.5453f);
+    scene_info.seed += 1.0f;
+    return result;
+}
+
+float energy(vec3 colour) {
+    float third = 1.0f / 3.0f;
+    return dot(colour, vec3(third, third, third));
+}
+
+mat3 GetTangentSpace(vec3 normal) {
+    // Choose a helper vector for the cross product
+    vec3 helper = vec3(1, 0, 0);
+    if (abs(normal.x) > 0.99f)
+        helper = vec3(1, 0, 0);
+    
+    // Generate vectors
+    vec3 tangent = normalize(cross(normal, helper));
+    vec3 binormal = normalize(cross(normal, tangent));
+    return mat3(tangent, binormal, normal);
+}
+
+vec3 SampleHemisphere(vec3 normal) {
+    // Uniformly sample hemisphere direction
+    float cos_theta = rand();
+    float sin_theta = sqrt(max(0.0f, 1.0f - cos_theta * cos_theta));
+    float phi = 2 * PI * rand();
+    vec3 tangent_space_dir = vec3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
+    // Transform direction to world space
+    return GetTangentSpace(normal) * tangent_space_dir;
+}
+
 Ray CreateRay(vec3 origin, vec3 direction) {
     Ray ray;
     ray.origin = origin;
@@ -85,7 +120,7 @@ RayHit CreateRayHit() {
     hit.position = vec3(0.0f, 0.0f, 0.0f);
     hit.distance = INF;
     hit.normal = vec3(0.0f, 0.0f, 0.0f);
-    hit.albedo = vec3(0.0f, 0.0f, 0.0f);
+    hit.albedo = vec3(1.0f, 1.0f, 1.0f);
     hit.specular = vec3(0.0f, 0.0f, 0.0f);
     return hit;
 }
@@ -100,8 +135,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit) {
     }
 }
 
-void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
-{
+void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere) {
     // Calculate distance along the ray where the sphere is intersected
     vec3 d = ray.origin - sphere.position;
     float p1 = -dot(ray.direction, d);
@@ -121,8 +155,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
     }
 }
 
-RayHit Trace(Ray ray)
-{
+RayHit Trace(Ray ray) {
     RayHit bestHit = CreateRayHit();
     //IntersectGroundPlane(ray, bestHit);
     // Add a floating unit sphere
@@ -134,24 +167,43 @@ RayHit Trace(Ray ray)
     return bestHit;
 }
 
+float sdot(vec3 x, vec3 y)
+{
+    float f = 1.0f;
+    return clamp(dot(x, y) * f,  0.0f, 1.0f);
+}
+
+float sdot(vec3 x, vec3 y, float f)
+{
+    return clamp(dot(x, y) * f,  0.0f, 1.0f);
+}
+
 vec3 Shade(inout Ray ray, RayHit hit) {
     if (hit.distance < INF) {
-        // Reflect the ray and multiply energy with specular reflection
-        ray.origin = hit.position + hit.normal * 0.001f;
-        ray.direction = reflect(ray.direction, hit.normal);
-        ray.energy *= hit.specular;
+        // Calculate chance of diffuse and specular reflection
+        hit.albedo = min(1.0f - hit.specular, hit.albedo);
+        float spec_chance = energy(hit.specular);
+        float diff_chance = energy(hit.albedo);
+        float sum = spec_chance + diff_chance;
+        spec_chance /= sum;
+        diff_chance /= sum;
 
-        // Shadow test ray
-        bool shadow = false;
-        Ray shadowRay = CreateRay(hit.position + hit.normal * 0.001f, -1 * directional_light.data.xyz);
-        RayHit shadowHit = Trace(shadowRay);
-        if (shadowHit.distance != INF)
-        {
-            return vec3(0.0f, 0.0f, 0.0f);
+        // Roulette-select the ray's path
+        float roulette = rand();
+        if (roulette < spec_chance) {
+            // Specular reflection
+            ray.origin = hit.position + hit.normal + 0.001f;
+            ray.direction = reflect(ray.direction, hit.normal);
+            ray.energy *= (1.0f/ spec_chance) * hit.specular * sdot(hit.normal, ray.direction);
         }
-        
-        // Return a diffuse-shaded color
-        return clamp(dot(hit.normal, directional_light.data.xyz) * -1, 0.0f, 1.0f) * directional_light.data.w * hit.albedo;
+        else {
+            // Diffuse reflection
+            ray.origin = hit.position + hit.normal * 0.001f;
+            ray.direction = SampleHemisphere(hit.normal);
+            ray.energy *= (1.0f / diff_chance) * 2 * hit.albedo * sdot(hit.normal, ray.direction);
+        }
+
+        return vec3(0.0f, 0.0f, 0.0f);
     }
     else {
         // Erase the ray's energy - the sky doesn't reflect anything
@@ -172,6 +224,13 @@ vec4 aa(vec4 pixel, ivec2 pos) {
 	return mix(frame_sample, pixel, alpha);
 }
 
+void ConvergeSamples(inout vec4 pixel, ivec2 pos) {
+    vec4 texel = imageLoad(image_render, pos);
+    vec4 a = texel * (aa_data.current_sample - 1) / aa_data.current_sample;
+    vec4 b = pixel * 1 / aa_data.current_sample;
+    pixel = a + b;
+}
+
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 image_size = imageSize(image_render);
@@ -182,9 +241,7 @@ void main() {
     // Create a ray for the UVs
     Ray ray = CreateCameraRay(uv);
 
-    RayHit hit = Trace(ray);
-    vec3 result = Shade(ray, hit);
-
+    vec3 result = vec3(0, 0, 0);
     for (int i = 0; i < 8; i++)
     {
         RayHit hit = Trace(ray);
@@ -193,6 +250,13 @@ void main() {
             break;
     }
 
-    imageStore(image_render, pos, aa(vec4(result, 1.0), pos.xy));
+    vec4 pixel = vec4(result, 1.0f);
+
+    if (aa_data.current_sample > 1) {
+        ConvergeSamples(pixel, pos);
+    }
+
+    imageStore(image_render, pos, pixel);
+    //imageStore(image_render, pos, vec4(rand(), rand(), rand(), 1.0));
 }
 
