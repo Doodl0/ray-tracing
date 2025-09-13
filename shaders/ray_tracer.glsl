@@ -36,6 +36,8 @@ struct Sphere
     float radius;
     vec3 albedo;
     float specular;
+    vec3 emission;
+    float smoothness;
 };
 
 layout(set = 0, binding = 5, std430) restrict buffer Spheres {
@@ -56,6 +58,8 @@ struct RayHit
     vec3 normal;
     vec3 albedo;
     vec3 specular;
+    float smoothness;
+    vec3 emission;
 };
 
 const float PI = 3.14159265f;
@@ -73,6 +77,11 @@ float energy(vec3 colour) {
     return dot(colour, vec3(third, third, third));
 }
 
+float SmoothnessToPhongAlpha(float s)
+{
+    return pow(1000.0f, s * s);
+}
+
 mat3 GetTangentSpace(vec3 normal) {
     // Choose a helper vector for the cross product
     vec3 helper = vec3(1, 0, 0);
@@ -85,10 +94,10 @@ mat3 GetTangentSpace(vec3 normal) {
     return mat3(tangent, binormal, normal);
 }
 
-vec3 SampleHemisphere(vec3 normal) {
-    // Uniformly sample hemisphere direction
-    float cos_theta = rand();
-    float sin_theta = sqrt(max(0.0f, 1.0f - cos_theta * cos_theta));
+vec3 SampleHemisphere(vec3 normal, float alpha) {
+    // Uniformly sample hemisphere direction, where alpha determines the kind of the sampling
+    float cos_theta = pow(rand(), 1.0f/ (alpha + 1.0f));
+    float sin_theta = sqrt(1.0f - cos_theta * cos_theta);
     float phi = 2 * PI * rand();
     vec3 tangent_space_dir = vec3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
     // Transform direction to world space
@@ -120,8 +129,10 @@ RayHit CreateRayHit() {
     hit.position = vec3(0.0f, 0.0f, 0.0f);
     hit.distance = INF;
     hit.normal = vec3(0.0f, 0.0f, 0.0f);
-    hit.albedo = vec3(1.0f, 1.0f, 1.0f);
+    hit.albedo = vec3(0.0f, 0.0f, 0.0f);
     hit.specular = vec3(0.0f, 0.0f, 0.0f);
+    hit.smoothness = 0.0f;
+    hit.emission = vec3(0.0f, 0.0f, 0.0f);
     return hit;
 }
 
@@ -132,6 +143,10 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit) {
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = vec3(0.0f, 1.0f, 0.0f);
+        bestHit.albedo = vec3(0.5f, 0.5f, 0.5f);
+        bestHit.specular = vec3(0.0f, 0.0f, 0.0f);
+        bestHit.smoothness = 0.25f;
+        bestHit.emission = vec3(0.0f, 0.0f, 0.0f);
     }
 }
 
@@ -152,6 +167,8 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere) {
         bestHit.albedo = sphere.albedo;
         vec3 specular = vec3(sphere.specular, sphere.specular, sphere.specular);
         bestHit.specular = specular;
+        bestHit.smoothness = sphere.smoothness;
+        bestHit.emission = sphere.emission;
     }
 }
 
@@ -192,18 +209,20 @@ vec3 Shade(inout Ray ray, RayHit hit) {
         float roulette = rand();
         if (roulette < spec_chance) {
             // Specular reflection
+            float alpha = SmoothnessToPhongAlpha(hit.smoothness);
             ray.origin = hit.position + hit.normal + 0.001f;
-            ray.direction = reflect(ray.direction, hit.normal);
-            ray.energy *= (1.0f/ spec_chance) * hit.specular * sdot(hit.normal, ray.direction);
+            ray.direction = SampleHemisphere(reflect(ray.direction, hit.normal), alpha);
+            float f = (alpha + 2) / (alpha + 1);
+            ray.energy *= (1.0f/ spec_chance) * hit.specular * sdot(hit.normal, ray.direction, f);
         }
         else {
             // Diffuse reflection
             ray.origin = hit.position + hit.normal * 0.001f;
-            ray.direction = SampleHemisphere(hit.normal);
-            ray.energy *= (1.0f / diff_chance) * 2 * hit.albedo * sdot(hit.normal, ray.direction);
+            ray.direction = SampleHemisphere(hit.normal, 1.0f);
+            ray.energy *= (1.0f / diff_chance) * hit.albedo;
         }
 
-        return vec3(0.0f, 0.0f, 0.0f);
+        return hit.emission;
     }
     else {
         // Erase the ray's energy - the sky doesn't reflect anything
@@ -215,19 +234,10 @@ vec3 Shade(inout Ray ray, RayHit hit) {
     }
 }
 
-vec4 aa(vec4 pixel, ivec2 pos) {
-    if (aa_data.current_sample < 1) {
-        return pixel;
-    }
-	vec4 frame_sample = imageLoad(image_render, pos);
-    float alpha = 1.0f / float(aa_data.current_sample + 1);
-	return mix(frame_sample, pixel, alpha);
-}
-
 void ConvergeSamples(inout vec4 pixel, ivec2 pos) {
     vec4 texel = imageLoad(image_render, pos);
-    vec4 a = texel * (aa_data.current_sample - 1) / aa_data.current_sample;
-    vec4 b = pixel * 1 / aa_data.current_sample;
+    vec4 a = texel * float(aa_data.current_sample - 1) / float(aa_data.current_sample);
+    vec4 b = pixel * 1.0f / float(aa_data.current_sample);
     pixel = a + b;
 }
 
@@ -236,7 +246,7 @@ void main() {
     ivec2 image_size = imageSize(image_render);
     
     // Transform pixels to [-1, 1] range
-    vec2 uv = vec2((pos.xy + aa_data.offset) / vec2(image_size) * 2.0f - 1.0f);
+    vec2 uv = vec2(vec2(pos.xy + aa_data.offset) / vec2(image_size) * 2.0f - 1.0f);
 
     // Create a ray for the UVs
     Ray ray = CreateCameraRay(uv);
