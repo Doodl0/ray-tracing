@@ -26,7 +26,7 @@ scene_info;
 // Antialiasing data buffer
 layout(set = 0, binding = 4, std430) restrict buffer AntialiasData {
     vec2 offset;
-    int current_sample;
+    float current_sample;
 }
 aa_data;
 
@@ -64,17 +64,29 @@ struct RayHit
 
 const float PI = 3.14159265f;
 const float INF = 99999999.0;
+const float EPSILON = 1e-4;
 
 float rand()
 {
-    float result = fract(sin(scene_info.seed / INF * dot(vec2(gl_GlobalInvocationID.xy), vec2(12.9898f, 78.233f))) * 43758.5453f);
     scene_info.seed += 1.0f;
+    float result = fract(sin(float(scene_info.seed) / 1000.0f * dot(vec2(gl_GlobalInvocationID.xy), vec2(12.9898f, 78.233f))) * 43758.5453f);
     return result;
 }
 
 float energy(vec3 colour) {
     float third = 1.0f / 3.0f;
     return dot(colour, vec3(third, third, third));
+}
+
+float sdot(vec3 x, vec3 y)
+{
+    float f = 1.0f;
+    return clamp(dot(x, y) * f,  0.0, 1.0);
+}
+
+float sdot(vec3 x, vec3 y, float f)
+{
+    return clamp(dot(x, y) * f,  0.0, 1.0);
 }
 
 float SmoothnessToPhongAlpha(float s)
@@ -144,8 +156,8 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit) {
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = vec3(0.0f, 1.0f, 0.0f);
         bestHit.albedo = vec3(0.5f, 0.5f, 0.5f);
-        bestHit.specular = vec3(0.0f, 0.0f, 0.0f);
-        bestHit.smoothness = 0.25f;
+        bestHit.specular = vec3(1.0f, 1.0f, 1.0f);
+        bestHit.smoothness = 1.0f;
         bestHit.emission = vec3(0.0f, 0.0f, 0.0f);
     }
 }
@@ -172,27 +184,76 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere) {
     }
 }
 
+bool IntersectTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout float t, inout float u, inout float v) {
+    // Find vectors for 2 edges sharing vert0
+    vec3 edge1 = vert1 - vert0;
+    vec3 edge2 = vert2 - vert0;
+
+    // Begin calculating determinant - also used to calculate U parameter
+    vec3 pvec = cross(ray.direction, edge2);
+
+    // If determinant is near zero, ray lies in plane of triangle
+    float det = dot(edge1, pvec);
+
+    // Use backface culling
+    if (det < EPSILON) {
+        return false;
+    }
+    float inv_det = 1.0f / det;
+
+    // Calculate distance from vert0 to ray origin
+    vec3 tvec = ray.origin - vert0;
+
+    // Calculate U parameter and test bounds
+    u = dot(tvec, pvec) * inv_det;
+    if (v < 0.0 || u > 1.0f) {
+        return false;
+    }
+
+    // Prepare to test V parameter
+    vec3 qvec = cross(tvec, edge1);
+
+    // Calculate V parameter and test bounds
+    v = dot(ray.direction, qvec) * inv_det;
+    if (v < 0.0 || u + v > 1.0f) {
+        return false;
+    }
+
+    // Calculate t, ray interects triangle
+    t = dot(edge2, qvec) * inv_det;
+
+    return true;
+}
+
 RayHit Trace(Ray ray) {
     RayHit bestHit = CreateRayHit();
-    //IntersectGroundPlane(ray, bestHit);
+    IntersectGroundPlane(ray, bestHit);
     // Add a floating unit sphere
     for (int i = 0; i <= spheres.spheres.length(); i++)
 	{
 		Sphere sphere = spheres.spheres[i];
 		IntersectSphere(ray, bestHit, sphere);
 	}
+
+    // Trace single triangle
+    vec3 v0 = vec3(-15, 0, -10);
+    vec3 v1 = vec3(15, 0, -10);
+    vec3 v2 = vec3(0, 15 * sqrt(2), -10);
+    float t, u, v;
+
+    if (IntersectTriangle_MT97(ray, v0, v1, v2, t, u, v)) {
+        if (t > 0 && t < bestHit.distance) {
+            bestHit.distance = t;
+            bestHit.position = ray.origin + t * ray.direction;
+            bestHit.normal = normalize(cross(v1 - v0, v2 - v0));
+            bestHit.albedo = vec3(0, 1, 0);
+            bestHit.specular = vec3(0, 0, 0);
+            bestHit.smoothness = 0;
+            bestHit.emission = vec3(0.0f, 1.0f, 0.0f);
+        }
+    }
+
     return bestHit;
-}
-
-float sdot(vec3 x, vec3 y)
-{
-    float f = 1.0f;
-    return clamp(dot(x, y) * f,  0.0f, 1.0f);
-}
-
-float sdot(vec3 x, vec3 y, float f)
-{
-    return clamp(dot(x, y) * f,  0.0f, 1.0f);
 }
 
 vec3 Shade(inout Ray ray, RayHit hit) {
@@ -236,9 +297,14 @@ vec3 Shade(inout Ray ray, RayHit hit) {
 
 void ConvergeSamples(inout vec4 pixel, ivec2 pos) {
     vec4 texel = imageLoad(image_render, pos);
-    vec4 a = texel * float(aa_data.current_sample - 1) / float(aa_data.current_sample);
-    vec4 b = pixel * 1.0f / float(aa_data.current_sample);
+    // Troubleshooting - Pixels sometimes return completely black and stay so, think it's due to texel. so just return original colour instead
+    if (isnan(texel.x) || isnan(texel.y) || isnan(texel.z) || isnan(texel.w)) {
+        return;
+    }
+    vec4 a = texel * (aa_data.current_sample - 1.0f) / aa_data.current_sample;
+    vec4 b = pixel / aa_data.current_sample;
     pixel = a + b;
+    
 }
 
 void main() {
@@ -250,19 +316,24 @@ void main() {
 
     // Create a ray for the UVs
     Ray ray = CreateCameraRay(uv);
+    RayHit hit = Trace(ray);
 
-    vec3 result = vec3(0, 0, 0);
+    vec3 result = Shade(ray, hit);
     for (int i = 0; i < 8; i++)
     {
-        RayHit hit = Trace(ray);
+        hit = Trace(ray);
         result += ray.energy * Shade(ray, hit);
-        if (!any(bvec3(ray.energy)))
+        if (!any(bvec3(ray.energy))) {
             break;
+        }
     }
 
-    vec4 pixel = vec4(result, 1.0f);
-
-    if (aa_data.current_sample > 1) {
+    vec4 pixel = vec4(result, 1.0);
+    pixel.x = clamp(pixel.x, 0.0, 1.0);
+    pixel.y = clamp(pixel.y, 0.0, 1.0);
+    pixel.z = clamp(pixel.z, 0.0, 1.0);
+    
+    if (aa_data.current_sample > 1.0) {
         ConvergeSamples(pixel, pos);
     }
 

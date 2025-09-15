@@ -29,8 +29,8 @@ var scene_data_buffer: RID
 var sky_rid: RID
 
 # Antialias shader variables
-var current_sample := 0
-var max_samples := 255
+var current_sample: float = 0.0
+var max_samples := 2048.0
 var last_transform: Transform3D
 var aa_buffer: RID
 
@@ -82,6 +82,8 @@ func render():
 	# Wait for the GPU to finish.
 	rd.sync()
 	
+	
+	
 	# Retrieve render data.
 	var render_bytes = rd.texture_get_data(render_rid, 0)
 	output_display.display_render(render_bytes)
@@ -94,13 +96,14 @@ func setup_compute():
 	# Create a format for the render image
 	render_format = RDTextureFormat.new()
 	render_format.format = RenderingDevice.DATA_FORMAT_R32G32B32A32_SFLOAT
+	render_format.is_discardable = false
 	render_format.height = viewport_dimensions.y
 	render_format.width = viewport_dimensions.x
 	# Set usage bits. Can add the required bits together
 	render_format.usage_bits =  \
-			RenderingDevice.TEXTURE_USAGE_STORAGE_BIT + \
-			RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT + \
-			RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT	
+		RenderingDevice.TEXTURE_USAGE_STORAGE_BIT | \
+		RenderingDevice.TEXTURE_USAGE_CAN_UPDATE_BIT | \
+		RenderingDevice.TEXTURE_USAGE_CAN_COPY_FROM_BIT
 	# Prepare render texture now and set the data later.
 	render_rid = rd.texture_create(render_format, render_view)
 	
@@ -167,7 +170,7 @@ func setup_compute():
 	# Scene data buffer
 	var direction := -directional_light.transform.basis.z
 	var intensity := directional_light.light_energy
-	var seed := PackedFloat32Array([float(sphere_seed)]).to_byte_array()
+	var seed := PackedFloat32Array([float(randf())]).to_byte_array()
 	var scene_data := PackedFloat32Array([direction.x, direction.y, direction.z, intensity]).to_byte_array()
 	scene_data.append_array(seed)
 	scene_data_buffer = rd.storage_buffer_create(scene_data.size(), scene_data)
@@ -178,7 +181,7 @@ func setup_compute():
 
 	# Antialiasing data buffer
 	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
-	var current_sample_data := PackedInt32Array([current_sample]).to_byte_array()
+	var current_sample_data := PackedFloat32Array([current_sample]).to_byte_array()
 	var aa_data := offset_data + current_sample_data
 	aa_buffer = rd.storage_buffer_create(aa_data.size(), aa_data)
 	var aa_uniform := RDUniform.new()
@@ -228,9 +231,17 @@ func update_compute():
 	camera_data_bytes.append_array(projection_matrix)
 	rd.buffer_update(camera_data_buffer, 0, camera_data_bytes.size(), camera_data_bytes)
 	
+	# Scene data buffer
+	var direction := -directional_light.transform.basis.z
+	var intensity := directional_light.light_energy
+	var seed := PackedFloat32Array([float(randf())]).to_byte_array()
+	var scene_data := PackedFloat32Array([direction.x, direction.y, direction.z, intensity]).to_byte_array()
+	scene_data.append_array(seed)
+	rd.buffer_update(scene_data_buffer, 0, scene_data.size(), scene_data)
+	
 	# Antialiasing data buffer
 	var offset_data := PackedFloat32Array([randf(), randf()]).to_byte_array()
-	var current_sample_data := PackedInt32Array([current_sample]).to_byte_array()
+	var current_sample_data := PackedFloat32Array([current_sample]).to_byte_array()
 	var aa_data := offset_data + current_sample_data
 	rd.buffer_update(aa_buffer, 0, aa_data.size(), aa_data)
 
@@ -240,12 +251,6 @@ func load_shader(p_rd: RenderingDevice, path: String) -> RID:
 	var shader_file_data: RDShaderFile = load(path)
 	var shader_spirv: RDShaderSPIRV = shader_file_data.get_spirv()
 	return p_rd.shader_create_from_spirv(shader_spirv)
-
-
-func transform_updated():
-	last_transform = self.global_transform
-	current_sample = 0
-
 
 func update_viewport_size():
 	# Set the render dimensions to the viewport dimensions so that the image is not stretched
