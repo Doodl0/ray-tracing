@@ -40,10 +40,32 @@ struct Sphere
     float smoothness;
 };
 
+struct MeshObject {
+    // Make sure struct is a multiple of 16 bytes for memory alignment
+    mat4 local_to_world_matrix; // 64 bytes
+    vec3 albedo; // 12 bytes - 76 total
+    float specular; // 4 bytes - 80 total
+    vec3 emission;  // 12 bytes - 92 total
+    float smoothness; // 4 bytes - 96 total
+    mat3x2 bbox; // 24 bytes - 120 total
+    uint vertices_index; // 4 bytes - 124 total
+    uint vertices_length; // 4 bytes - 128 total
+};
+
 layout(set = 0, binding = 5, std430) restrict buffer Spheres {
     Sphere spheres[];
 }
 spheres;
+
+layout(set = 0, binding = 6, std430) restrict buffer MeshObjects {
+    MeshObject meshes[];
+}
+mesh_objects;
+
+layout(set = 0, binding = 7, std430) restrict buffer Vertices {
+    vec4 triangles[];
+}
+vertices;
 
 struct Ray {
     vec3 origin;
@@ -64,7 +86,7 @@ struct RayHit
 
 const float PI = 3.14159265f;
 const float INF = 99999999.0;
-const float EPSILON = 1e-4;
+const float EPSILON = 1e-8;
 
 float rand()
 {
@@ -199,14 +221,14 @@ bool IntersectTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout f
     if (det < EPSILON) {
         return false;
     }
-    float inv_det = 1.0f / det;
+    float inv_det = 1.0 / det;
 
     // Calculate distance from vert0 to ray origin
     vec3 tvec = ray.origin - vert0;
 
     // Calculate U parameter and test bounds
     u = dot(tvec, pvec) * inv_det;
-    if (v < 0.0 || u > 1.0f) {
+    if (u < 0.0 || u > 1.0) {
         return false;
     }
 
@@ -215,7 +237,7 @@ bool IntersectTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout f
 
     // Calculate V parameter and test bounds
     v = dot(ray.direction, qvec) * inv_det;
-    if (v < 0.0 || u + v > 1.0f) {
+    if (v < 0.0 || u + v > 1.0) {
         return false;
     }
 
@@ -225,32 +247,47 @@ bool IntersectTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout f
     return true;
 }
 
+void IntersectMesh(Ray ray, inout RayHit bestHit, MeshObject meshObject) {
+    // TODO: Add AABB intersection before checking every triangle
+
+    uint vindex = meshObject.vertices_index;
+    uint vlength = vindex + meshObject.vertices_length;
+
+    for(uint i = vindex; i < vlength; i += 3) {
+        // could cause issues
+        vec3 v0 = (meshObject.local_to_world_matrix * vertices.triangles[i + 2]).xyz;
+        vec3 v1 = (meshObject.local_to_world_matrix * vertices.triangles[i + 1]).xyz;
+        vec3 v2 = (meshObject.local_to_world_matrix * vertices.triangles[i]).xyz;
+
+        float t, u, v;
+
+        if (IntersectTriangle_MT97(ray, v0, v1, v2, t, u, v)) {
+            if (t > 0 && t < bestHit.distance) {
+                bestHit.distance = t;
+                bestHit.position = ray.origin + t * ray.direction;
+                bestHit.normal = normalize(cross(v1 - v0, v2 - v0));
+                bestHit.albedo = meshObject.albedo;
+                bestHit.specular = vec3(meshObject.specular, meshObject.specular, meshObject.specular);
+                bestHit.smoothness = meshObject.smoothness;
+                bestHit.emission = meshObject.emission;
+            }
+        }
+    }
+}
+
 RayHit Trace(Ray ray) {
     RayHit bestHit = CreateRayHit();
     IntersectGroundPlane(ray, bestHit);
-    // Add a floating unit sphere
-    for (int i = 0; i <= spheres.spheres.length(); i++)
-	{
+    // Trace spheres
+    for (uint i = 0; i <= spheres.spheres.length(); i++) {
 		Sphere sphere = spheres.spheres[i];
 		IntersectSphere(ray, bestHit, sphere);
 	}
 
-    // Trace single triangle
-    vec3 v0 = vec3(-15, 0, -10);
-    vec3 v1 = vec3(15, 0, -10);
-    vec3 v2 = vec3(0, 15 * sqrt(2), -10);
-    float t, u, v;
-
-    if (IntersectTriangle_MT97(ray, v0, v1, v2, t, u, v)) {
-        if (t > 0 && t < bestHit.distance) {
-            bestHit.distance = t;
-            bestHit.position = ray.origin + t * ray.direction;
-            bestHit.normal = normalize(cross(v1 - v0, v2 - v0));
-            bestHit.albedo = vec3(0, 1, 0);
-            bestHit.specular = vec3(0, 0, 0);
-            bestHit.smoothness = 0;
-            bestHit.emission = vec3(0.0f, 1.0f, 0.0f);
-        }
+    // Trace meshes
+    for (uint i = 0; i <= mesh_objects.meshes.length(); i++) {
+        MeshObject mesh = mesh_objects.meshes[i];
+        IntersectMesh(ray, bestHit, mesh);
     }
 
     return bestHit;
@@ -336,6 +373,8 @@ void main() {
     if (aa_data.current_sample > 1.0) {
         ConvergeSamples(pixel, pos);
     }
+
+    //pixel = vec4(mesh_objects.meshes[0].emission, 1.0);
 
     imageStore(image_render, pos, pixel);
     //imageStore(image_render, pos, vec4(rand(), rand(), rand(), 1.0));

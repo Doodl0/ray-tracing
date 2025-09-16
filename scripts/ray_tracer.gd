@@ -1,5 +1,7 @@
 extends Node3D
 
+@export var mesh: Mesh
+
 @export var sphere_seed: int
 var viewport_dimensions: Vector2i
 @onready var output_display: RenderOutput = $%"Output Display"
@@ -35,8 +37,12 @@ var last_transform: Transform3D
 var aa_buffer: RID
 
 # Mesh data
-@export var spheres: Array[Sphere]
+@export var spheres: Array[RayTracedSphere]
 var sphere_buffer: RID
+
+@export var meshes: Array[RayTracedMesh]
+var mesh_buffer: RID
+var vertices_buffer: RID
 
 func _ready() -> void:
 	seed(sphere_seed)
@@ -47,7 +53,6 @@ func _ready() -> void:
 	
 	setup_compute()
 	render()
-
 
 func _process(delta: float) -> void:
 	update_compute()
@@ -81,9 +86,7 @@ func render():
 	rd.submit()
 	# Wait for the GPU to finish.
 	rd.sync()
-	
-	
-	
+
 	# Retrieve render data.
 	var render_bytes = rd.texture_get_data(render_rid, 0)
 	output_display.display_render(render_bytes)
@@ -189,6 +192,7 @@ func setup_compute():
 	aa_uniform.binding = 4
 	aa_uniform.add_id(aa_buffer)
 	
+	# Sphere data
 	var sphere_data := PackedByteArray()
 	for sphere in spheres:
 		sphere_data.append_array(sphere.get_data())
@@ -198,7 +202,40 @@ func setup_compute():
 	sphere_uniform.binding = 5
 	sphere_uniform.add_id(sphere_buffer)
 	
-	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, light_uniform, aa_uniform, sphere_uniform]
+	# Vertices and mesh objects
+	var vertices_data := PackedByteArray()
+	var mesh_objects_data := PackedByteArray()
+	
+	var current_vertex := 0
+	for mesh in meshes:
+		# Vertex Data
+		var vertices_length := mesh.mesh.get_faces().size() # Dividing by 3 gives the amount of triangles
+		var vertices_bytes := mesh.get_vertex_data()
+		
+		vertices_data.append_array(vertices_bytes)
+		
+		# Mesh object data
+		var mesh_object := mesh.get_mesh_object_data()
+		# Append the starting point and length of the vertice data
+		var vertices_alignment := PackedInt32Array([current_vertex, vertices_length]).to_byte_array()
+		mesh_object.append_array(vertices_alignment)
+		mesh_objects_data.append_array(mesh_object)
+		
+		current_vertex += vertices_length
+	
+	mesh_buffer = rd.storage_buffer_create(mesh_objects_data.size(), mesh_objects_data)
+	var mesh_uniform := RDUniform.new()
+	mesh_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	mesh_uniform.binding = 6
+	mesh_uniform.add_id(mesh_buffer)
+	
+	vertices_buffer = rd.storage_buffer_create(vertices_data.size(), vertices_data)
+	var vertices_uniform := RDUniform.new()
+	vertices_uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+	vertices_uniform.binding = 7
+	vertices_uniform.add_id(vertices_buffer)
+	
+	uniform_bindings = [render_uniform, camera_data_uniform, sky_uniform, light_uniform, aa_uniform, sphere_uniform, mesh_uniform, vertices_uniform]
 	
 	# Create the set of uniforms from list of created uniforms and shader RID
 	uniform_set = rd.uniform_set_create(uniform_bindings, shader_rid, 0)
@@ -244,7 +281,6 @@ func update_compute():
 	var current_sample_data := PackedFloat32Array([current_sample]).to_byte_array()
 	var aa_data := offset_data + current_sample_data
 	rd.buffer_update(aa_buffer, 0, aa_data.size(), aa_data)
-
 
 # Import, compile and load shader, return reference.
 func load_shader(p_rd: RenderingDevice, path: String) -> RID:

@@ -1,4 +1,4 @@
-class_name Sphere extends Node3D
+class_name RayTracedSphere extends Node3D
 
 @export var radius := 1.0
 @export var albedo: Color
