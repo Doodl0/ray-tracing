@@ -93,7 +93,7 @@ const float EPSILON = 1e-8;
 float rand()
 {
     scene_info.seed += 1.0f;
-    float result = fract(sin(float(scene_info.seed) / 1000.0f * dot(vec2(gl_GlobalInvocationID.xy), vec2(12.9898f, 78.233f))) * 43758.5453f);
+    float result = fract(sin(float(scene_info.seed) / 10000.0f * dot(vec2(gl_GlobalInvocationID.xy), vec2(12.9898f, 78.233f))) * 43758.5453f);
     return result;
 }
 
@@ -347,7 +347,7 @@ vec3 Shade(inout Ray ray, RayHit hit) {
         if (roulette < spec_chance) {
             // Specular reflection
             float alpha = SmoothnessToPhongAlpha(hit.smoothness);
-            ray.origin = hit.position + hit.normal + 0.001f;
+            ray.origin = hit.position + hit.normal * 0.001f;
             ray.direction = SampleHemisphere(reflect(ray.direction, hit.normal), alpha);
             float f = (alpha + 2) / (alpha + 1);
             ray.energy *= (1.0f/ spec_chance) * hit.specular * sdot(hit.normal, ray.direction, f);

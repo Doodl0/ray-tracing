@@ -37,7 +37,3 @@ func get_mesh_object_data() -> PackedByteArray:
 	local_to_world_matrix.append_array(bbox_data)
 	
 	return local_to_world_matrix.to_byte_array()
-
-func _ready() -> void:
-	print(mesh.get_aabb().position * global_transform)
-	print(mesh.get_aabb().end * global_transform)
