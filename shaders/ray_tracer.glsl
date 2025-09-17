@@ -47,9 +47,11 @@ struct MeshObject {
     float specular; // 4 bytes - 80 total
     vec3 emission;  // 12 bytes - 92 total
     float smoothness; // 4 bytes - 96 total
-    mat3x2 bbox; // 24 bytes - 120 total
+    vec4 bboxpos; // 16 bytes - 120 total
+    vec4 bboxend; // 16 bytes - 120 total
     uint vertices_index; // 4 bytes - 124 total
     uint vertices_length; // 4 bytes - 128 total
+    int padding[2];
 };
 
 layout(set = 0, binding = 5, std430) restrict buffer Spheres {
@@ -247,14 +249,51 @@ bool IntersectTriangle_MT97(Ray ray, vec3 vert0, vec3 vert1, vec3 vert2, inout f
     return true;
 }
 
+bool IntersectAABB(Ray ray, MeshObject meshObject) {
+    vec3 dirfrac;
+    dirfrac.x = 1.0f / ray.direction.x;
+    dirfrac.y = 1.0f / ray.direction.y;
+    dirfrac.z = 1.0f / ray.direction.z;
+
+    vec4 lb = meshObject.local_to_world_matrix * vec4(meshObject.bboxpos.x, meshObject.bboxpos.y, meshObject.bboxpos.z, 1.0);
+    vec4 rt = meshObject.local_to_world_matrix * vec4(meshObject.bboxend.x, meshObject.bboxend.y, meshObject.bboxend.z, 1.0);
+
+    float t1 = (lb.x - ray.origin.x)*dirfrac.x;
+    float t2 = (rt.x - ray.origin.x)*dirfrac.x;
+    float t3 = (lb.y - ray.origin.y)*dirfrac.y;
+    float t4 = (rt.y - ray.origin.y)*dirfrac.y;
+    float t5 = (lb.z - ray.origin.z)*dirfrac.z;
+    float t6 = (rt.z - ray.origin.z)*dirfrac.z;
+
+    float tmin = max(max(min(t1, t2), min(t3, t4)), min(t5, t6));
+    float tmax = min(min(max(t1, t2), max(t3, t4)), max(t5, t6));
+
+    // if tmax < 0, the ray is intersecting AABB, but the whole AABB is behind us
+    if (tmax < 0)
+    {
+        return false;
+    }
+
+    // if tmin > tmax, ray doesn't intersect AABB
+    if (tmin > tmax)
+    {
+        return false;
+    }
+
+    return true;
+}
+
 void IntersectMesh(Ray ray, inout RayHit bestHit, MeshObject meshObject) {
-    // TODO: Add AABB intersection before checking every triangle
+    // AABB intersection before checking every triangle for perfomance
+    if (!IntersectAABB(ray, meshObject)) {
+        return;
+    }
 
     uint vindex = meshObject.vertices_index;
     uint vlength = vindex + meshObject.vertices_length;
 
     for(uint i = vindex; i < vlength; i += 3) {
-        // could cause issues
+        // Godot renders triangles clockwise so inverse order
         vec3 v0 = (meshObject.local_to_world_matrix * vertices.triangles[i + 2]).xyz;
         vec3 v1 = (meshObject.local_to_world_matrix * vertices.triangles[i + 1]).xyz;
         vec3 v2 = (meshObject.local_to_world_matrix * vertices.triangles[i]).xyz;

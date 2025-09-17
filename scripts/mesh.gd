@@ -31,9 +31,13 @@ func get_mesh_object_data() -> PackedByteArray:
 	
 	# pack aabb as bytes
 	var bbox := mesh.get_aabb()
-	var bbox_data := PackedFloat32Array([bbox.position.x, bbox.position.y, bbox.position.z, bbox.end.x, bbox.end.y, bbox.end.z])
+	var bbox_data := PackedFloat32Array([bbox.position.x, bbox.position.y, bbox.position.z, 0.0, bbox.end.x, bbox.end.y, bbox.end.z, 0.0])
 	
 	local_to_world_matrix.append_array(material_data)
 	local_to_world_matrix.append_array(bbox_data)
 	
 	return local_to_world_matrix.to_byte_array()
+
+func _ready() -> void:
+	print(mesh.get_aabb().position * global_transform)
+	print(mesh.get_aabb().end * global_transform)

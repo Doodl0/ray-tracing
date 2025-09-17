@@ -217,7 +217,8 @@ func setup_compute():
 		# Mesh object data
 		var mesh_object := mesh.get_mesh_object_data()
 		# Append the starting point and length of the vertice data
-		var vertices_alignment := PackedInt32Array([current_vertex, vertices_length]).to_byte_array()
+		# 0s for padding to align memory
+		var vertices_alignment := PackedInt32Array([current_vertex, vertices_length, 0, 0]).to_byte_array()
 		mesh_object.append_array(vertices_alignment)
 		mesh_objects_data.append_array(mesh_object)
 		
